@@ -1,0 +1,20 @@
+version: '3.9'
+services:
+  lb:
+    build:
+      context: ./lb
+      dockerfile: Dockerfile
+    container_name: loadbalancer
+    ports:
+      - "5000:5000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true
+    networks:
+      - net1
+    environment:
+      - SERVER_IMAGE=server:latest
+networks:
+  net1:
+    name: net1          
+    driver: bridge
