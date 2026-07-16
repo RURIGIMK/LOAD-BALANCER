@@ -11,22 +11,24 @@ from consistent_hash import ConsistentHash
 app = Flask(__name__)
 
 # Constants
-M = 512
-K = 9
-NETWORK = "net1"
+M = 512                      # size of hash ring (number of slots)
+K = 9                         # virtual nodes per server on the ring
+NETWORK = "net1"              # docker network shared by LB and servers
 SERVER_IMAGE = os.environ.get('SERVER_IMAGE', 'server:latest')
-INITIAL_N = 3
-HEALTH_CHECK_INTERVAL = 5
+INITIAL_N = 3                 # number of server containers to spawn at boot
+HEALTH_CHECK_INTERVAL = 5      # seconds between heartbeat sweeps
 
 # Global state
 active_servers = []          # list of container names (hostnames)
 ch = ConsistentHash(M=M, K=K)
-lock = threading.Lock()
+lock = threading.Lock()      # guards active_servers + ch since Flask runs threaded
 
 def generate_random_name():
+    # Random server id used when replacing a dead server or adding without hostnames given
     return "S" + ''.join(random.choices('0123456789', k=6))
 
 def start_container(name):
+    # Spin up a new server container on the shared network, tagged with its own name
     cmd = [
         "docker", "run", "-d",
         "--name", name,
@@ -43,6 +45,7 @@ def start_container(name):
         return False
 
 def stop_container(name):
+    # Stop and remove container; used on scale-down and health-check replacement
     try:
         subprocess.run(["docker", "stop", name], check=True)
         subprocess.run(["docker", "rm", name], check=True)
@@ -52,6 +55,7 @@ def stop_container(name):
         return False
 
 def initialize_servers():
+    # Boot INITIAL_N servers named Server1..ServerN and register them on the ring
     global active_servers
     with lock:
         for i in range(1, INITIAL_N + 1):
@@ -63,10 +67,12 @@ def initialize_servers():
                 print(f"Failed to start initial server {name}")
 
 def health_check():
+    # Background loop: ping every active server's heartbeat endpoint;
+    # any server that fails is removed from the ring and replaced with a fresh one.
     while True:
         time.sleep(HEALTH_CHECK_INTERVAL)
         with lock:
-            to_check = active_servers.copy()
+            to_check = active_servers.copy()  # snapshot to avoid holding lock during network calls
         for server in to_check:
             try:
                 resp = requests.get(f"http://{server}:5000/heartbeat", timeout=2)
@@ -76,7 +82,7 @@ def health_check():
                 print(f"Server {server} failed health check. Replacing...")
                 with lock:
                     if server not in active_servers:
-                        continue
+                        continue  # already handled by another iteration
                     ch.remove_server(server)
                     active_servers.remove(server)
                     stop_container(server)
@@ -92,6 +98,7 @@ def health_check():
 
 @app.route('/rep', methods=['GET'])
 def get_replicas():
+    # Report current replica count and hostnames
     with lock:
         return jsonify({
             "message": {
@@ -103,6 +110,7 @@ def get_replicas():
 
 @app.route('/add', methods=['POST'])
 def add_servers():
+    # Add n new servers; optional explicit hostnames, rest are randomly generated
     data = request.get_json()
     if not data or 'n' not in data:
         return jsonify({"message": "Invalid JSON", "status": "failure"}), 400
@@ -145,6 +153,7 @@ def add_servers():
 
 @app.route('/rm', methods=['DELETE'])
 def remove_servers():
+    # Remove n servers; optional explicit hostnames, rest picked randomly
     data = request.get_json()
     if not data or 'n' not in data:
         return jsonify({"message": "Invalid JSON", "status": "failure"}), 400
@@ -193,11 +202,12 @@ def remove_servers():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>', methods=['GET'])
 def forward(path):
+    # Catch-all proxy: pick a server via consistent hash and forward the request
     # Avoid interfering with special endpoints
     if path in ['rep', 'add', 'rm']:
         return jsonify({"message": "Not found", "status": "failure"}), 404
 
-    request_id = random.randint(100000, 999999)
+    request_id = random.randint(100000, 999999)  # random request key hashed onto the ring
     with lock:
         server = ch.get_server(request_id)
         if server is None:
@@ -209,12 +219,12 @@ def forward(path):
         try:
             return jsonify(resp.json()), resp.status_code
         except:
-            return resp.text, resp.status_code
+            return resp.text, resp.status_code  # non-JSON response from server
     except requests.exceptions.RequestException as e:
         return jsonify({"message": f"Error forwarding: {str(e)}", "status": "failure"}), 500
 
 if __name__ == '__main__':
     initialize_servers()
     health_thread = threading.Thread(target=health_check, daemon=True)
-    health_thread.start()
+    health_thread.start()  # runs forever in background, restarting dead servers
     app.run(host='0.0.0.0', port=5000, threaded=True)

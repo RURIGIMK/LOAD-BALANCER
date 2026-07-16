@@ -8,6 +8,7 @@ from collections import Counter
 LB_URL = "http://localhost:5000"
 
 def send_request():
+    # Hit LB /home once, return which backend server id answered (or None on failure)
     try:
         resp = requests.get(f"{LB_URL}/home", timeout=2)
         if resp.status_code == 200:
@@ -20,12 +21,13 @@ def send_request():
     return None
 
 def run_experiment(total=10000, concurrency=50):
+    # Fire `total` requests split across `concurrency` worker threads, collect server ids hit
     results = []
     def worker():
         for _ in range(total // concurrency):
             sid = send_request()
             if sid:
-                results.append(sid)
+                results.append(sid)  # list.append is thread-safe under GIL, no lock needed
     threads = []
     for _ in range(concurrency):
         t = threading.Thread(target=worker)
@@ -36,6 +38,7 @@ def run_experiment(total=10000, concurrency=50):
     return results
 
 def experiment_a1():
+    # A-1: with fixed N=3 servers, check how evenly 10000 requests distribute
     print("A‑1: 10000 requests, N=3")
     results = run_experiment(10000)
     counter = Counter(results)
@@ -50,6 +53,7 @@ def experiment_a1():
     plt.show()
 
 def experiment_a2():
+    # A-2: scale LB from N=2 to N=6 servers, measure average load per server at each N
     print("A‑2: Vary N from 2 to 6")
     avg_loads = []
     N_values = list(range(2, 7))
