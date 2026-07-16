@@ -14,6 +14,7 @@ services:
       - net1
     environment:
       - SERVER_IMAGE=server:latest
+      - HASH_VARIANT=${HASH_VARIANT:-default}
 networks:
   net1:
     name: net1          

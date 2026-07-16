@@ -1,4 +1,4 @@
-.PHONY: build run stop clean
+.PHONY: build run run-alt-hash stop clean analysis
 
 build:
 	docker build -t server ./server
@@ -7,8 +7,15 @@ build:
 run: build
 	docker-compose up
 
+# A-4: run with modified H/Phi hash functions for comparison.
+run-alt-hash: build
+	HASH_VARIANT=alt docker-compose up
+
 stop:
 	docker-compose down
 
 clean: stop
 	docker rmi server lb || true
+
+analysis:
+	python3 analysis/analysis.py all
