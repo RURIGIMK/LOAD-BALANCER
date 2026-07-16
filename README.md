@@ -1,5 +1,13 @@
 # Customizable Load Balancer – Distributed Systems Assignment
 
+| Name | Admission Number |
+| :--- | :--- |
+| **Kamau Edwin Kamau** | 152803 |
+| **Kanyi Sharon Wambui** | 152486 |
+| **Rurigi Maina** | 163912 |
+
+---
+
 ## Design Choices
 - **Language**: Python (Flask) for simplicity and rapid prototyping.
 - **Consistent Hashing**: 512 slots (M), 9 virtual nodes per server (K = log2(512)).
