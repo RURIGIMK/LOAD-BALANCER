@@ -1,85 +1,137 @@
-# Customizable Load Balancer – Distributed Systems Assignment
+# Customizable Load Balancer
 
-| Name | Admission Number |
-| :--- | :--- |
-| **Kamau Edwin Kamau** | 152803 |
-| **Kanyi Sharon Wambui** | 152486 |
-| **Rurigi Maina** | 163912 |
+A containerized distributed systems project that implements a customizable HTTP load balancer with consistent hashing, dynamic scaling, health monitoring, failure recovery, and performance analysis.
 
----
+## Why this project matters
 
-## Design Choices
-- **Language**: Python (Flask) for simplicity and rapid prototyping.
-- **Consistent Hashing**: 512 slots (M), 9 virtual nodes per server (K = log2(512)).
-  Default hash functions per spec: `H(i) = i^2 + 2i + 17` (request -> slot),
-  `Phi(i,j) = i^2 + j^2 + 2j + 25` (virtual server -> slot). Quadratic probing
-  resolves collisions when placing virtual server slots (`lb/consistent_hash.py`).
-  Set `HASH_VARIANT=alt` on the lb container to use the modified hash functions
-  used for the Task4/A-4 comparison.
-- **Container Management**: Uses `docker` CLI via subprocess; the load balancer runs as a privileged container with the Docker socket mounted.
-- **Fault Tolerance**: A background thread periodically checks `/heartbeat`; failed servers are replaced with new random-named containers.
-- **Scaling**: `/add` and `/rm` endpoints allow dynamic scaling. Provided hostnames are respected; random names are generated for the rest.
-- **Unknown endpoints**: `GET /<path>` returns `400` with
-  `"<Error> '/<path>' endpoint does not exist in server replicas"` for any path
-  not registered on the server (only `/home` and `/heartbeat` are valid).
+This project demonstrates more than routing requests. It models the operational concerns that appear in distributed systems: distributing traffic, keeping replicas available, scaling the system, detecting failures, and measuring the effect of design decisions.
 
-## Assumptions
-- All containers run on the same Docker network `net1`.
-- The server image is named `server:latest` (built from `server/`).
-- The load balancer itself runs on port 5000 (mapped to host).
-- Request IDs are 6‑digit random numbers generated per request.
+## Architecture
 
-## Running the System
-1. Clone the repository.
-2. Run `make build` to build both images.
-3. Run `make run` to start the load balancer (and initial 3 servers).
-4. Use `make stop` to tear down.
-5. Run `python3 analysis/analysis.py all` (host needs `requests` and `matplotlib`)
-   to perform A-1, A-2, and A-3 experiments against the running stack.
-6. For A-4, stop the stack, run `make run-alt-hash` (starts the lb with the
-   modified hash functions), then run `python3 analysis/analysis.py a4`.
+```text
+                         Client
+                           |
+                           v
+                  +------------------+
+                  |  Flask Load      |
+                  |    Balancer      |
+                  +--------+---------+
+                           |
+                    Consistent Hash Ring
+                           |
+          +----------------+----------------+
+          |                |                |
+          v                v                v
+     +---------+      +---------+      +---------+
+     | Server  |      | Server  |      | Server  |
+     | Replica |      | Replica |      | Replica |
+     +---------+      +---------+      +---------+
+          ^                ^                ^
+          +----------------+----------------+
+                           |
+                     Health Checks
+                           |
+                    Failure Recovery
+```
 
-## Testing
-- Use `curl` or `httpie` to test endpoints:
-  - `GET http://localhost:5000/rep`
-  - `POST http://localhost:5000/add` with JSON `{"n": 2, "hostnames": ["S5","S6"]}`
-  - `DELETE http://localhost:5000/rm` with JSON `{"n": 1, "hostnames": ["Server1"]}`
-  - `GET http://localhost:5000/home` – forwarded to a server.
-  - `GET http://localhost:5000/unknown` – returns `400` with the
-    "endpoint does not exist" error.
-- `analysis/analysis.py a3` exercises `/rep`, `/add`, `/home`, an unknown path,
-  `/rm`, then kills a server container with `docker kill` and polls `/rep`
-  until the load balancer has spawned and registered a replacement,
-  logging every step to `A3_failure_log.txt`.
+## Key capabilities
 
-## Performance Analysis
-Run `make run` then `python3 analysis/analysis.py all` to regenerate the
-figures/data files below before submission — this repo ships the analysis
-tooling but the actual experiment artifacts (`A1_bar.png`, `A2_line.png`,
-`A3_failure_log.txt`, `A4_*`) must be produced by running the stack in a
-Docker-capable environment.
+- Consistent hashing with virtual nodes
+- Quadratic probing for virtual node placement
+- Docker based server replicas
+- Dynamic replica creation and removal
+- Periodic health checks through `/heartbeat`
+- Automatic replacement of failed server containers
+- Request forwarding to healthy replicas
+- Explicit handling of unknown endpoints
+- Alternate hash configuration for comparative experiments
+- Automated performance analysis and experiment tooling
 
-- **A‑1** (`A1_bar.png`, `A1_bar_counts.txt`): 10,000 requests against N=3.
-  Expect the three servers to receive close to 3,333 requests each; report the
-  actual counts and variance once generated, and note that residual imbalance
-  comes from uneven virtual-node spacing on the ring (9 virtual nodes/server
-  keeps this small).
-- **A‑2** (`A2_line.png`, `A2_line_data.txt`): N stepped from 2 to 6, 10,000
-  requests per step. Expect average load per server (10000/N) to fall roughly
-  hyperbolically as N grows — report the measured curve and compare to the
-  ideal 10000/N line to comment on scalability overhead (container
-  start-up time, ring rebalancing).
-- **A‑3** (`A3_failure_log.txt`): Exercises every load balancer endpoint and
-  records a `docker kill` of one replica plus the polling loop that confirms
-  the load balancer detects the failure via `/heartbeat` and spawns/registers
-  a replacement, restoring N replicas.
-- **A‑4** (`A4_A1_bar.png`, `A4_A2_line.png`): Same A-1/A-2 experiments run
-  against the load balancer started with `HASH_VARIANT=alt`
-  (`H(i) = i^2 + 4i + 7`, `Phi(i,j) = 2i^2 + j^2 + 6j + 11`). Compare the
-  resulting distribution/scalability plots against the default-hash A-1/A-2
-  results and report whether the alternate constants produce a more/less even
-  spread across the ring.
+## Technical design
 
-## Additional Notes
-- The health‑check interval is 5 seconds; adjust as needed.
-- All containers are cleaned up when stopping the compose stack.
+The implementation uses Python and Flask for the load balancer and Docker for isolated service replicas. The default configuration uses 512 hash slots and 9 virtual nodes per server. Requests are mapped to the hash ring and routed to the corresponding replica.
+
+A background health check monitors replicas through `/heartbeat`. When a replica fails, the load balancer detects the failure and creates a replacement container, restoring the expected number of active servers.
+
+The system also exposes `/add` and `/rm` operations for controlled scaling. Hostnames can be supplied explicitly or generated automatically.
+
+## Project structure
+
+```text
+.
+├── lb/                 # Load balancer implementation and hashing logic
+├── server/             # Replica server implementation and Docker setup
+├── analysis/           # Performance experiments and analysis scripts
+├── docker-compose.yml  # Local distributed deployment
+├── Makefile            # Build, run, stop, and experiment commands
+└── README.md
+```
+
+## Running locally
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Python 3
+- `requests` and `matplotlib` for analysis
+
+### Start the distributed system
+
+```bash
+make build
+make run
+```
+
+Stop the stack with:
+
+```bash
+make stop
+```
+
+### Exercise the API
+
+```bash
+curl http://localhost:5000/rep
+curl http://localhost:5000/home
+```
+
+Add replicas:
+
+```bash
+curl -X POST http://localhost:5000/add \
+  -H "Content-Type: application/json" \
+  -d '{"n":2,"hostnames":["S5","S6"]}'
+```
+
+Remove replicas:
+
+```bash
+curl -X DELETE http://localhost:5000/rm \
+  -H "Content-Type: application/json" \
+  -d '{"n":1,"hostnames":["Server1"]}'
+```
+
+## Performance experiments
+
+The repository includes tooling for four experiments:
+
+- **A1:** request distribution across three replicas
+- **A2:** scalability as the number of replicas changes
+- **A3:** endpoint behavior and failure recovery after a replica is killed
+- **A4:** comparison of the default and alternate hashing functions
+
+Run the standard experiments with:
+
+```bash
+python3 analysis/analysis.py all
+```
+
+The alternate hash experiment can be run using the repository's `make run-alt-hash` target before executing the A4 analysis.
+
+## Engineering takeaways
+
+The project provided practical experience with distributed request routing, consistent hashing, container orchestration, service health monitoring, failure recovery, dynamic scaling, and experimental evaluation. It also highlights an important systems engineering principle: an implementation should be evaluated not only by whether requests succeed, but by how the system behaves under scale and failure.
+
+## Team
+
+Developed as a distributed systems assignment by Rurigi Maina and project collaborators.
